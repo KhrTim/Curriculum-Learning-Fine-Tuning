@@ -1,1 +1,8 @@
 **__pycache__**
+testing.py
+testing.ipynb
+.pytest_cache/
+*.pyc
+.mypy_cache/
+.coverage
+htmlcov/

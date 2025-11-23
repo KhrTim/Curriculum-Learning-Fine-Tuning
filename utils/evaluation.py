@@ -1,4 +1,3 @@
-import gc
 import logging
 import re
 from pathlib import Path
@@ -6,6 +5,7 @@ from typing import Any, Dict, List, Optional
 
 import torch
 from transformers import AutoTokenizer, pipeline
+from peft import LoraConfig
 from utils.utils import cleanup_memory
 
 
@@ -20,23 +20,12 @@ class Evaluation:
     """Class for evaluating text-generation models on datasets like GSM8K."""
 
     def __init__(self):
-        """
-        Evaluation class for model testing.
-        Note: Models loaded with accelerate (device_map="auto") handle device placement automatically.
-        """
+        """Initialize evaluation class."""
         pass
 
     @staticmethod
     def extract_answer(text: Optional[str]) -> Optional[str]:
-        """
-        Extract final numerical answer from GSM8K-format text.
-
-        Args:
-            text: str or None
-
-        Returns:
-            Extracted answer as string, or None if not found.
-        """
+        """Extract numerical answer from GSM8K-format text."""
         if not text:
             return None
 
@@ -57,30 +46,26 @@ class Evaluation:
         test_dataset: List[Dict[str, str]],
         batch_size: int = 8,
         max_new_tokens: int = 512,
+        save_samples_dir: Optional[Path] = None,
     ) -> Dict[str, Any]:
-        """
-        Evaluate a model on a dataset.
-
-        Args:
-            model: Pretrained HuggingFace model or path
-            test_dataset: List of dicts with 'question' and 'answer'
-            tokenizer: Optional tokenizer
-            batch_size: Number of prompts per batch
-            max_new_tokens: Maximum tokens to generate per prompt
-
-        Returns:
-            Dict with evaluation metrics and sample outputs
-        """
+        """Evaluate model on test dataset and return metrics."""
         results = {
             "exact_match": 0,
             "total": 0,
+            "correct_formatting": 0,
             "examples": [],
+            "exact_match_samples": [],
         }
 
         # TODO: which tokenizer is loaded?
         # TODO: protect from repetition
         logging.info("Loading the model...")
         tokenizer = AutoTokenizer.from_pretrained(model_checkpoint)
+        
+        config = LoraConfig.from_pretrained(model_checkpoint)
+        device = 'cuda' if config.base_model_name_or_path == 'HuggingFaceTB/SmolLM2-135M' else None
+        device_map = 'auto' if config.base_model_name_or_path == 'microsoft/phi-2' else None
+
         pipe = pipeline(
             "text-generation",
             model=model_checkpoint,
@@ -88,11 +73,12 @@ class Evaluation:
             max_new_tokens=max_new_tokens,
             do_sample=False,  # deterministic generation
             num_workers=16,
-            device="auto",
+            device_map=device_map,
+            device=device,
             dtype=torch.float16,
             no_repeat_ngram_size=3,
             encoder_repetition_penalty=1.1,
-            length_penalty=0.7
+            length_penalty=0.7,
         )
         # Prepare prompts
         prompts = [f"Question: {ex['question']}\nAnswer:" for ex in test_dataset]
@@ -113,8 +99,11 @@ class Evaluation:
                 (pred_answer == true_answer) if pred_answer and true_answer else False
             )
 
+            # Check if generated text has correct GSM8K formatting (#### before answer)
+            has_correct_formatting = bool(re.search(r"####\s*-?\d+\.?\d*", generated_text))
+
             results["exact_match"] += int(exact_match)
-            results["total"] += 1
+            results["correct_formatting"] += int(has_correct_formatting)
 
             # Store first few examples
             if len(results["examples"]) < 5:
@@ -128,18 +117,39 @@ class Evaluation:
                     }
                 )
 
-        # Compute percentage
-        results["exact_match_pct"] = (
-            (results["exact_match"] / results["total"]) * 100
-            if results["total"] > 0
-            else 0.0
-        )
+            # Collect all exact match samples
+            if exact_match:
+                results["exact_match_samples"].append(
+                    {
+                        "question": example["question"],
+                        "true_answer": true_answer,
+                        "generated": generated_text,
+                        "pred_answer": pred_answer,
+                    }
+                )
+
+        # Compute percentages
+        total = results["total"] = len(outputs)
+        for metric in ["exact_match", "correct_formatting"]:
+            results[f"{metric}_pct"] = (results[metric] / total * 100) if total > 0 else 0.0
 
         logging.info(
-            f"Evaluation has been finished. Exact match : {results['exact_match_pct']}% "
+            f"Evaluation finished. Exact match: {results['exact_match_pct']:.2f}% | "
+            f"Correct formatting: {results['correct_formatting_pct']:.2f}%"
         )
+
+        # Save exact match samples if directory is provided
+        if save_samples_dir:
+            save_samples_dir.mkdir(parents=True, exist_ok=True)
+            import json
+            checkpoint_name = model_checkpoint.name if isinstance(model_checkpoint, Path) else str(model_checkpoint).split('/')[-3]
+            samples_file = save_samples_dir / f"exact_match_samples_{checkpoint_name}.json"
+            with open(samples_file, "w") as f:
+                json.dump(results["exact_match_samples"], f, indent=2)
+            logging.info(f"Saved {len(results['exact_match_samples'])} exact match samples to {samples_file}")
+
         logging.info("Cleaning up...")
 
-        cleanup_memory(tokenizer,pipe)
+        cleanup_memory(tokenizer, pipe)
 
         return results

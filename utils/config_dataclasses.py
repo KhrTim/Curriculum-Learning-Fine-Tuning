@@ -6,19 +6,19 @@ from typing import Optional
 
 @dataclass
 class ModelConfig:
-    """Holds model name mappings."""
+    """Model configuration with HuggingFace path and short name."""
 
     huggingface_path: str
     short_name: str
 
     def to_dict(self) -> dict:
-        """Return a dictionary representation of the model config."""
+        """Convert to dictionary."""
         return asdict(self)
 
 
 @dataclass
 class TrainingConfig:
-    """Training hyperparameters."""
+    """Training hyperparameters configuration."""
 
     num_epochs: int = 3
     batch_size: int = 4
@@ -26,7 +26,7 @@ class TrainingConfig:
     gradient_accumulation_steps: int = 4
 
     def to_dict(self) -> dict:
-        """Return a dictionary representation of the training config."""
+        """Convert to dictionary."""
         return asdict(self)
 
 
@@ -38,7 +38,7 @@ class Strategy(Flag):
 
 @dataclass
 class ExperimentConfig:
-    """Experiment configuration."""
+    """Experiment configuration with strategy and dataset limits."""
 
     wb_project_name: str = "math-curriculum-learning"
     strategy: Strategy = Strategy.BASELINE_FINETUNING
@@ -49,5 +49,5 @@ class ExperimentConfig:
     )
 
     def to_dict(self) -> dict:
-        """Return a dictionary representation of the experiment config."""
+        """Convert to dictionary."""
         return asdict(self)

@@ -1,9 +1,9 @@
 import json
 from enum import Enum, Flag
-from typing import Any, Callable, Optional, Tuple
+from typing import Any, Optional
 
 import torch
-from peft import LoraConfig
+from peft import LoraConfig, AutoPeftModelForCausalLM
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from trl import SFTConfig, SFTTrainer
 from pathlib import Path
@@ -19,27 +19,26 @@ logging.basicConfig(
 )
 
 
+def cleanup_memory(*objects) -> None:
+    """Free GPU and CPU memory."""
+    for obj in objects:
+        try:
+            del obj
+        except Exception:
+            pass
 
-def cleanup_memory(*objects):
-        """
-        Free GPU + CPU memory
-        """
-        for obj in objects:
-            try:
-                del obj
-            except Exception:
-                pass
+    gc.collect()
 
-        gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
 
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-            torch.cuda.synchronize()
-
-        logging.info("Memory cleaned up.")
+    logging.info("Memory cleaned up.")
 
 
 class EnumEncoder(json.JSONEncoder):
+    """JSON encoder that handles Enum and Flag types."""
+
     def default(self, obj):
         if isinstance(obj, (Enum, Flag)):
             return obj.name  # or obj.value
@@ -56,26 +55,9 @@ def fine_tune(
     learning_rate: float = 3e-4,
     gradient_accumulation_steps: int = 4,
     wandb_run_name: Optional[str] = None,
-    from_scratch=True,
+    from_scratch: bool = True,
 ) -> Path:
-    """
-    Generic training function supporting all strategies with LoRA and SFT.
-
-    Args:
-        model_name: HuggingFace model name or path
-        train_dataset: Training dataset
-        output_dir: Directory to save model
-        num_epochs: Number of epochs
-        batch_size: Training batch size
-        learning_rate: Learning rate
-        formatting_func: Function to format examples (optional)
-        resume_from_checkpoint: Checkpoint path to resume training
-        gradient_accumulation_steps: Steps for gradient accumulation
-        wandb_run_name: Name of WandB run
-
-    Returns:
-        trainer, model, tokenizer, total_steps
-    """
+    """Fine-tune model with LoRA and SFT, returning saved model path."""
 
     # LoRA configuration
     lora_config = LoraConfig(
@@ -96,11 +78,27 @@ def fine_tune(
     if from_scratch and model_name != model_config.huggingface_path:
         logging.warning("'from_scratch' is selected but given a local checkpoint")
 
-    model = AutoModelForCausalLM.from_pretrained(
-        model_name,
-        torch_dtype=torch.float16,
-        device_map="auto",
-        trust_remote_code=True,
+    device = 'cuda' if model_config.huggingface_path == 'HuggingFaceTB/SmolLM2-135M' else None
+    device_map = 'auto' if model_config.huggingface_path == 'microsoft/phi-2' else None
+
+
+    model = (
+        AutoModelForCausalLM.from_pretrained(
+            model_name,
+            torch_dtype=torch.float16,
+            device_map=device_map,
+            device=device,
+            trust_remote_code=True,
+        )
+        if from_scratch
+        else AutoPeftModelForCausalLM.from_pretrained(
+            model_name,
+            torch_dtype=torch.float16,
+            device_map=device_map,
+            device=device,
+            trust_remote_code=True,
+            is_trainable=True,
+        )
     )
 
     tokenizer = AutoTokenizer.from_pretrained(
@@ -111,10 +109,15 @@ def fine_tune(
     # Compute steps
     steps_per_epoch = len(train_dataset) // (batch_size * gradient_accumulation_steps)
     total_steps = steps_per_epoch * num_epochs
-    print(f"Training plan: {steps_per_epoch} steps/epoch, total {total_steps} steps")
+    logging.info(
+        f"Training plan: {steps_per_epoch} steps/epoch, total {total_steps} steps"
+    )
 
     # SFT training configuration
     training_args = SFTConfig(
+        completion_only_loss=False,
+        dataloader_persistent_workers=True,
+        dataloader_num_workers=16,
         gradient_accumulation_steps=gradient_accumulation_steps,
         learning_rate=learning_rate,
         logging_steps=10,
@@ -129,7 +132,7 @@ def fine_tune(
         save_strategy="epoch",
         fp16=True,
         warmup_steps=2,
-        torch_compile=True
+        # torch_compile=True
     )
 
     # Initialize trainer
@@ -142,9 +145,9 @@ def fine_tune(
     )
 
     # Start training
-    print("\n" + "=" * 50)
-    print("Starting training...")
-    print("=" * 50 + "\n")
+    logging.info("=" * 50)
+    logging.info("Starting training...")
+    logging.info("=" * 50)
 
     trainer.train()
 
@@ -152,6 +155,8 @@ def fine_tune(
     final_model_path = f"{output_dir}/final"
     trainer.save_model(final_model_path)
     tokenizer.save_pretrained(final_model_path)
-    print(f"Training complete! Model and tokenizer are saved to {final_model_path}")
+    logging.info(
+        f"Training complete! Model and tokenizer are saved to {final_model_path}"
+    )
     cleanup_memory(model, tokenizer, trainer)
     return final_model_path

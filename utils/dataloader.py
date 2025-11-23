@@ -29,7 +29,7 @@ class DatasetLoader:
 
     @staticmethod
     def problem_complexity(question: str) -> float:
-        """Estimate problem complexity by counting and weighting math operations."""
+        """Estimate complexity by counting weighted math operations."""
         operations = {
             "add": r"\b(?:add|plus|sum|more|increase|total|combined|\+)\b",
             "sub": r"\b(?:subtract|minus|less|fewer|decrease|difference|remaining|\-)\b",
@@ -45,15 +45,16 @@ class DatasetLoader:
 
         return max(add + sub + 1.5 * mul + 1.5 * div, 1)
 
-    def difficulty_score(self, ex) -> float:
-        """Weighted difficulty score based on solution steps × operations × numbers."""
+    def difficulty_score(self, ex: dict) -> float:
+        """Calculate difficulty score from steps, operations, and numbers."""
         steps = sum(1 for line in ex["answer"].split("\n") if line.strip())
         nums = len(re.findall(r"\d+", ex["question"]))
         ops = self.problem_complexity(ex["question"])
         return steps + ops * nums
 
     @staticmethod
-    def _as_dataset(easy, normal, hard):
+    def _as_dataset(easy: list, normal: list, hard: list) -> OrderedDict:
+        """Convert difficulty lists to ordered dataset dictionary."""
         return OrderedDict(
             [
                 ("easy", Dataset.from_list(easy)),
@@ -66,26 +67,28 @@ class DatasetLoader:
     # ------------------------------ FORMATTING -------------------------------
     # -------------------------------------------------------------------------
 
-    # def format_example_gsm8k(self, example):
-    #     return {'text':f"Question: {example['question']}\nAnswer: {example['answer']}"}
-
-    def format_example_gsm8k(self, example):
+    def format_example_gsm8k(self, example: dict) -> dict:
+        """Format GSM8K example into prompt-completion pairs."""
         return {
             "prompt": f"Question: {example['question']}\nAnswer:",
             "completion": example["answer"],
         }
 
-    def _format_splits(self, splits):
-        """Apply GSM8K formatting to all training splits."""
+    def _format_splits(self, splits: dict) -> dict:
+        """Apply GSM8K formatting to training splits."""
         if "train" in splits:
             splits["train"] = splits["train"].map(
-                self.format_example_gsm8k, remove_columns=["answer", "question"], batched=True, num_proc=8
+                self.format_example_gsm8k,
+                remove_columns=["answer", "question"],
+                num_proc=16,
             )
             return splits
 
         formatted_splits = {
             diff: ds.map(
-                self.format_example_gsm8k, remove_columns=["answer", "question"],batched=True,num_proc=8
+                self.format_example_gsm8k,
+                remove_columns=["answer", "question"],
+                num_proc=16,
             )
             for diff, ds in splits["train_splits"].items()
         }
@@ -99,7 +102,8 @@ class DatasetLoader:
     # ------------------------------ LOADING ----------------------------------
     # -------------------------------------------------------------------------
 
-    def _load_split(self, split_name: str, max_samples: int | None):
+    def _load_split(self, split_name: str, max_samples: int | None) -> Dataset:
+        """Load GSM8K split with optional sample limit."""
         ds = load_dataset("gsm8k", "main", split=split_name)
         return (
             ds.select(range(max_samples))
@@ -107,7 +111,8 @@ class DatasetLoader:
             else ds
         )
 
-    def get_train_test_base(self):
+    def get_train_test_base(self) -> dict:
+        """Load train and test splits."""
         train = self._load_split("train", self.max_train_samples)
         test = self._load_split("test", self.max_test_samples)
 
@@ -122,14 +127,16 @@ class DatasetLoader:
     # --------------------------- SPLITTING METHODS ---------------------------
     # -------------------------------------------------------------------------
 
-    def _split_by_answer_length(self, dataset):
+    def _split_by_answer_length(self, dataset: Dataset) -> OrderedDict:
+        """Split dataset by answer length into easy, normal, hard."""
         easy, normal, hard = [], [], []
         for ex in dataset:
             L = len(ex["answer"])
             (easy if L < 168 else normal if L <= 280 else hard).append(ex)
         return self._as_dataset(easy, normal, hard)
 
-    def _split_by_weighted_score(self, dataset):
+    def _split_by_weighted_score(self, dataset: Dataset) -> OrderedDict:
+        """Split dataset by weighted difficulty score."""
         scored = sorted(
             ((ex, self.difficulty_score(ex)) for ex in dataset), key=lambda x: x[1]
         )
@@ -139,7 +146,8 @@ class DatasetLoader:
         hard = [ex for ex, _ in scored[2 * n // 3 :]]
         return self._as_dataset(easy, normal, hard)
 
-    def get_curriculum_splits(self):
+    def get_curriculum_splits(self) -> dict:
+        """Get curriculum splits ordered by difficulty."""
         splits = self.get_train_test_base()
         train = splits["train"]
 
@@ -157,12 +165,14 @@ class DatasetLoader:
     # ------------------------------ PUBLIC API --------------------------------
     # -------------------------------------------------------------------------
 
-    def get_original_format(self):
+    def get_original_format(self) -> tuple:
+        """Get dataset in original format based on strategy."""
         if self.strategy == Strategy.BASELINE_FINETUNING:
             return self.get_train_test_base(), self.dataset_info
         return self.get_curriculum_splits(), self.dataset_info
 
-    def get_formatted(self):
+    def get_formatted(self) -> tuple:
+        """Get formatted dataset based on strategy."""
         if self.strategy == Strategy.BASELINE_FINETUNING:
             return self._format_splits(self.get_train_test_base()), self.dataset_info
         return self._format_splits(self.get_curriculum_splits()), self.dataset_info
