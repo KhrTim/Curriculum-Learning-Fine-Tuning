@@ -2,6 +2,10 @@
 
 Fine-tuning experiments comparing curriculum learning approaches on the GSM8K dataset.
 
+## Interactive Demo
+
+Try the interactive demo on Hugging Face Spaces: [Math Curriculum Learning Demo](https://huggingface.co/spaces/CrystalRaindropsFall/math-curriculum-learning-demo)
+
 ## Quick Start
 
 ```bash
