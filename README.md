@@ -70,11 +70,32 @@ Models trained with LoRA (r=16, α=32) for 2 epochs.
 
 ## Requirements
 
-- Python 3.8+
-- PyTorch
-- Transformers (HuggingFace)
-- PEFT (LoRA)
-- Weights & Biases (logging)
+**Python Version:** 3.12.2
+
+### Installation
+
+1. Create a virtual environment (recommended):
+```bash
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+```
+
+2. Install dependencies:
+```bash
+pip install -r requirements.txt
+```
+
+### Key Dependencies
+
+- **PyTorch** (2.5+): Deep learning framework
+- **Transformers** (4.57+): HuggingFace model library
+- **PEFT** (0.17+): Parameter-Efficient Fine-Tuning (LoRA)
+- **TRL** (0.24+): Transformer Reinforcement Learning
+- **Datasets** (4.3+): HuggingFace datasets library
+- **Weights & Biases** (0.22+): Experiment tracking
+- **Accelerate** (1.11+): Distributed training support
+
+See `requirements.txt` for the complete list of dependencies.
 
 ## Citation
 
